@@ -1,0 +1,326 @@
+---
+output:
+  pdf_document: default
+  html_document:
+    theme: journal
+    highlight: espresso
+---
+# Assignment 2
+# Sára Vargha & Benjámin Salga
+
+## Introduction
+The aim of this analysis to uncover the probability that a hotel in Barcelona is getting a high rating for various explanatory variables, such as the stars of the hotel and its distance from the city centre. For the sake of the analysis, the hotels-europe dateset was used that includes information on hotels in 46 European cities.
+
+## Data cleaning
+After the data has been loaded from osf.io, we first checked the summary of the variables (e.g. ratings, Trip Advisor ratings, number of ratings, starts, distance) we intended to use in our analysis. As the first step, we substituted missing values of rating, rating_reviewcount, ratingta, ratingta_count and stars with the average values, accordingly.  Second, we filtered the dataset for Barcelona as the actual city and created a binary variable for highly rated hotels (highly_rated=1 above for >= 4 stars, highly_rated=0 otherwise). Finally, we applied a filter to  set a minimum number of reviews and dropped observations with less than 20 reviews. Looking at the summary of our highly_rated variable, the median value is 0.594, meaning that 59.4% of hotels got at least a rating of 4 in our data.
+
+## Analysis
+In the first step of our analysis, we examined the relationship between the number of stars of a hotel and the probability of getting a higher rating (lpm1).Based on our LPM model, we can conclude that hotels with one additional star are 21.7% points more likely to get highly rated. average. 
+Next, we investigated the relationship between the number of reviews (both on the aggregrator website from where the data was originally scraped and on TripAdvisor) and the likelihood of getting a higher rating. First, we started with the number of ratings on the website (lpm2). Here we decided to add an extra binary variable to split the observations into two groups based on the number of ratings (rating_count_group=1 for observations with >= 180 reviews, rating_count=0 for observations with less than 180 reviews). Based on the outcome of our LPM model, hotels from the group with at least 180 reviews are 31.4 percentage points more likely to get at least a rating of 4. As we also had the count of Trip Advisor reviews in our data, we repeated the same steps with reviewta_count, splitting the hotels in two groups, with at least 480 reviews and less than 480 reviews (we chose a higher limit because hotels seemed to have significantly higher number of reviews on TripAdvisor). Similarly to the results of our second LPM model (lpm2), we can conclude that hotels belonging to the group of at least 480 TA reviews are 34.9 percentage points more likely to get highly rated (lpm4).
+In the next step, we enriched our LPM model with linear splines for distance, and accommodation types as factors on top of stars and rating_count_group (lpm4). From this model, only stars and rating_count_group lead to significant results. Ceteris paribus, hotels with one additional star are 20.5% points more likely to get highly rated, wheres ceteris paribus hotels with at least 180 reviews on the website are 17.9% points more likely to get highly rated. In the final part of our analysis we used the same set of explanatory variables as in case of lpm 4 to run logit and probit probability models. THe summary of the outcomes of these models (including the marginal differences of our logit and probit models) were stored in Table 1. From the results, we can indeed see that LPM, logit and probit lead to very similar results, with stars and rating_count_group being the only significant explanatory variables at 1% and LPM having the smallest standard errors. Looking at our histogram where we plotted one histogram for observations with actual y=1 (highly rated) and one for observations with actual y=0 (not highly rated) based on our rich LPM model (lpm4), we can see that the fit of the prediction is far from perfect. Although the two distributions overlap to some extent, a larger part of the distribution covers higher predicted values among hotels that got highly rated, as it should.
+
+
+
+
+```{r setup, include=FALSE}
+
+
+# clean environment 
+rm(list=ls())
+
+# Load packages
+library(tidyverse)
+library(lspline)
+library(cowplot)
+library(boot)
+library(estimatr)
+library(huxtable)
+library(stargazer)
+library(modelsummary)
+library(gridExtra)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(pscl)
+library(mfx)
+library(fixest)
+
+# Get the data
+hotels_europe <- read_csv('https://osf.io/utwjs/download')
+glimpse(hotels_europe)
+
+# look into ratings
+summary(hotels_europe$rating)
+
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# look into ratings, rating_reviewcount, ratingta
+summary(hotels_europe$rating)
+summary(hotels_europe$rating_reviewcount)
+summary(hotels_europe$distance)
+summary(hotels_europe$stars)
+summary(hotels_europe$ratingta)
+summary(hotels_europe$ratingta_count)
+
+# substitute missing values with averages
+hotels_europe$rating <- replace(hotels_europe$rating, is.na(hotels_europe$rating), mean(hotels_europe$rating, na.rm=TRUE))
+hotels_europe$rating_reviewcount <- replace(hotels_europe$rating_reviewcount, is.na(hotels_europe$rating_reviewcount), mean(hotels_europe$rating_reviewcount, na.rm=TRUE))
+hotels_europe$stars <- replace(hotels_europe$stars, is.na(hotels_europe$stars), mean(hotels_europe$stars, na.rm=TRUE))
+hotels_europe$ratingta <- replace(hotels_europe$ratingta, is.na(hotels_europe$ratingta), mean(hotels_europe$ratingta, na.rm=TRUE))
+hotels_europe$ratingta_count <- replace(hotels_europe$ratingta_count, is.na(hotels_europe$ratingta_count), mean(hotels_europe$ratingta_count, na.rm=TRUE))
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+# pick Barcelona as actual city and creae binary for 'highly_rated'
+hotels_barcelona <- hotels_europe %>% 
+  filter(city_actual=='Barcelona') %>%
+  mutate(highly_rated = ifelse(rating>=4, 1, 0))
+
+# remove those hotels which has below 20 reviews
+hotels_barcelona <- hotels_barcelona %>% filter(hotels_barcelona$ratingta_count >= 20) 
+hotels_barcelona <- hotels_barcelona %>% filter(hotels_barcelona$rating_reviewcount >= 20)
+
+summary(hotels_barcelona$highly_rated)
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+# Number of stars
+lpm1 <- lm(highly_rated ~ stars, data=hotels_barcelona)
+summary(lpm1, vcov=sandwich)
+
+hotels_barcelona$pred1 <- predict(lpm1)
+
+table(hotels_barcelona$pred1, hotels_barcelona$stars)
+table(hotels_barcelona$highly_rated, hotels_barcelona$stars)
+
+#create weights
+hotels_barcelona<- hotels_barcelona %>%
+  group_by(stars, highly_rated) %>%
+  mutate(weight = n())  %>%
+  mutate(weight_2=(weight/1000))
+
+```
+
+
+## Charts
+
+```{r echo = F, warning=FALSE, fig.height = 3, fig.align="center"}
+g1<-ggplot(data = hotels_barcelona, label=stars) +
+  geom_point(aes(x = stars, y = pred1), size = 1,  shape = 16) +
+  geom_line(aes(x = stars, y = pred1),  size=0.7) +
+  geom_point(aes(x = stars, y = highly_rated, size=weight_2), fill = " Blue",  shape = 16, alpha=0.8, show.legend=F, na.rm=TRUE)+
+  labs(x = "Number of stars",y = "Predicted probability of highly rated", title='Relationship between stars and the probability of highly rated')+
+  coord_cartesian(xlim = c(1, 5), ylim=c(0,1.05))
+g1
+
+```
+
+
+
+```{r, echo=FALSE, include=FALSE}
+# Relationship between distance from city center and highly rated
+hotels_barcelona <-hotels_barcelona %>%
+  group_by(distance, highly_rated) %>%
+  mutate(weight = n()/100)
+
+# Relationship between alternative distance from city center 2 and highly rated
+hotels_barcelona <-hotels_barcelona %>%
+  group_by(distance_alter, highly_rated) %>%
+  mutate(weight = n()/100)
+
+```
+
+
+```{r echo = F, warning=FALSE, fig.height = 3, fig.align="center"}
+g2<-ggplot(data = hotels_barcelona, aes(x=distance, y=highly_rated)) +
+  geom_point(aes(x = distance, y = highly_rated, size=weight), color= "blue", shape = 16, alpha=0.8, show.legend=F, na.rm=TRUE)  + #ezt ki lehet venni belőle
+  geom_smooth(method="loess", color= "red") +
+  labs(x = "Distance from city center",y = "Probability of highly rated")
+g2
+
+g2b<-ggplot(data = hotels_barcelona, aes(x=distance_alter, y=highly_rated)) +
+  geom_point(aes(x = distance, y = highly_rated, size=weight), color= "blue", shape = 16, alpha=0.8, show.legend=F, na.rm=TRUE)  + #ezt ki lehet venni belőle
+  geom_smooth(method="loess", color= "red") +
+  labs(x = "Alternative Distance from city center",y = "Probability of highly rated")
+g2b
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+# Relationship between review count and highly rated
+hotels_barcelona <- hotels_barcelona %>%
+  mutate(rating_count_group = ifelse(rating_reviewcount >= 180, 1, 0))
+
+lpm2 <- lm(highly_rated ~ rating_count_group, data=hotels_barcelona)
+summary(lpm2, vcov=sandwich)
+
+hotels_barcelona$pred2 <- predict(lpm2)
+
+hotels_barcelona<- hotels_barcelona %>%
+  group_by(rating_count_group, highly_rated) %>%
+  mutate(weight = n())  %>%
+  mutate(weight_2=(weight/1000))
+
+# Relationship between review count on TripAdvisor and highly rated
+hotels_barcelona <- hotels_barcelona %>% 
+  mutate(highly_rated_ta = ifelse(ratingta>=4, 1, 0))
+
+hotels_barcelona <- hotels_barcelona %>%
+  mutate(rating_count_groupta = ifelse(ratingta_count >= 480, 1, 0))
+
+lpm3 <- lm(highly_rated_ta ~ rating_count_groupta, data=hotels_barcelona)
+summary(lpm3, vcov=sandwich)
+
+hotels_barcelona$pred3 <- predict(lpm3)
+
+hotels_barcelona<- hotels_barcelona %>%
+  group_by(rating_count_groupta, highly_rated) %>%
+  mutate(weight = n())  %>%
+  mutate(weight_2=(weight/1000))
+
+```
+
+```{r echo = F, warning=FALSE, fig.height = 3, fig.align="center"}
+g3<-ggplot(data = hotels_barcelona, label=rating_count_group) +
+  geom_point(aes(x = rating_count_group, y = pred2), size = 1,  shape = 16) +
+  geom_line(aes(x = rating_count_group, y = pred2),  size=0.7) +
+  geom_point(aes(x = rating_count_group, y = highly_rated, size=weight_2), fill = " Blue",  shape = 16, alpha=0.8, show.legend=F, na.rm=TRUE)+
+  labs(x = "Rating count group",y = "Predicted probability of highly rated")+
+  coord_cartesian(xlim = c(0, 1), ylim=c(0,1))
+g3
+
+g4<-ggplot(data = hotels_barcelona, label=rating_count_groupta) +
+  geom_point(aes(x = rating_count_groupta, y = pred3), size = 1,  shape = 16) +
+  geom_line(aes(x = rating_count_groupta, y = pred3),  size=0.7) +
+  geom_point(aes(x = rating_count_groupta, y = highly_rated, size=weight_2), fill = " Blue",  shape = 16, alpha=0.8, show.legend=F, na.rm=TRUE)+
+  labs(x = "Rating count group on TripAdvisor",y = "Predicted probability of highly rated")+
+  coord_cartesian(xlim = c(0, 1), ylim=c(0,1))
+g4
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+#Probability Models
+# creating linear spline variables
+
+lpm4 <-lm(highly_rated ~ stars + rating_count_group + lspline(distance, c(0,5)) + 
+            lspline(distance_alter, c(0,5)) + as.factor(accommodation_type), data=hotels_barcelona)
+summary(lpm4, vcov=sandwich)
+
+hotels_barcelona$pred4 <- predict(lpm4)
+summary(hotels_barcelona$pred4)
+
+```
+
+```{r echo = F, warning=FALSE, fig.height = 3, fig.align="center"}
+g5<-ggplot(data=hotels_barcelona, aes(x=pred4)) +
+  geom_histogram(binwidth=0.02) +
+  coord_cartesian(xlim = c(0, 1.2))+
+  labs(x = "Predicted probability of highly rated",y = "Percent")
+g5
+
+g5b <- ggplot(data=hotels_barcelona, aes(x=pred4)) +
+  geom_density() +
+  coord_cartesian(xlim = c(0, 1.2))+
+  labs(x = "Predicted probability of highly rated",y = "Percent")
+g5b #lehet inkább a density plotot raknám majd bele, bár az előadás dián histogram volt
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+# list top 1% and bottom 1%
+hotels_barcelona <- hotels_barcelona[!is.na(hotels_barcelona$pred4), ]
+
+hotels_barcelona <- hotels_barcelona %>% 
+  mutate(q100_pred4 = ntile(pred4, 100))
+
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$stars)
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$rating_count_group) 
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$distance) 
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$distance_alter)
+ ## itt a felső és alsó 4 summary direkt ugyanaz?
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$stars)
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$rating_count_group) 
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$distance) 
+summary(hotels_barcelona[hotels_barcelona$q100_pred4==1, ]$distance_alter)
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+#logit and probit
+
+#use lpm4 further
+
+# logit
+logit <- glm(highly_rated ~ stars + rating_count_group + lspline(distance, c(0,5)) + 
+               lspline(distance_alter, c(0,5)) + as.factor(accommodation_type), data=hotels_barcelona, family='binomial')
+
+summary(logit)
+glance(logit)
+# predict probability
+hotels_barcelona$pred5 <- predict.glm(logit, type="response")
+summary(hotels_barcelona$pred5)
+
+# logit marginal difference
+logit_marg <- logitmfx(formula = highly_rated ~ stars + rating_count_group + distance + 
+                         distance_alter + as.factor(accommodation_type), data=hotels_barcelona, atmean=FALSE)
+
+# probit
+probit <- glm(highly_rated ~ stars + rating_count_group + lspline(distance, c(0,5)) + 
+                lspline(distance_alter, c(0,5)) + as.factor(accommodation_type), data=hotels_barcelona, family=binomial(link="probit"))
+
+summary(probit)
+glance(probit)
+# predict probability
+hotels_barcelona$pred6<- predict.glm(probit, type="response") 
+summary(hotels_barcelona$pred6)
+
+
+probit_marg <- probitmfx(formula = highly_rated ~ stars + rating_count_group + distance + 
+                           distance_alter + as.factor(accommodation_type), data=hotels_barcelona, atmean=FALSE)
+
+cm <- c('(Intercept)' = 'Constant')
+msummary(list('LPM4'=lpm4 , 'Logit'=logit, 'Logit marg.'=logit_marg, 'Probit'=probit, 'Probit marg.'=probit_marg),
+         fmt="%.3f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|R2|PseudoR2',
+         stars=c('*' = .05, '**' = .01),
+         coef_rename = cm,
+         coef_omit = 'as.factor(accommodation_type)*' )
+
+```
+
+```{r echo = F, warning=FALSE, fig.height = 3, fig.align="center"}
+g6<-ggplot(data = hotels_barcelona) +
+  geom_point(aes(x=pred4, y=pred6, color="Logit"), size=0.4,  shape=16) +
+  geom_point(aes(x=pred4, y=pred5,  color="Probit"), size=0.4,  shape=16) +
+  geom_line(aes(x=pred4, y=pred4), size=0.4) +
+  labs(x = "Predicted probability of highly rated", y="Predicted probability", colour='Model')
+g6
+
+```
+
+```{r echo = F, warning=FALSE, fig.height = 3, fig.align="center"}
+# GOODNESS OF FIT
+
+#use logit and pred5 
+## az lpm modellnek negatív az interceptje, emiatt inkább a logitot tenném bele
+
+
+g7<-ggplot(data = hotels_barcelona,aes(x=pred5)) + 
+  geom_histogram(data=subset(hotels_barcelona[hotels_barcelona$highly_rated == 1, ]), 
+                 aes(fill=as.factor(highly_rated), color=as.factor(highly_rated), y = (..count..)/sum(..count..)*100),
+                 binwidth = 0.05, boundary=0, alpha=0.8) +
+  geom_histogram(data=subset(hotels_barcelona[hotels_barcelona$highly_rated == 0, ]), 
+                 aes(fill=as.factor(highly_rated), color=as.factor(highly_rated), y = (..count..)/sum(..count..)*100), 
+                 binwidth = 0.05, boundary=0, alpha=0) +
+  ylab("Percent") +
+  xlab("Fitted values") 
+g7
+
+```
+
+
